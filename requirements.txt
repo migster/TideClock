@@ -1,0 +1,14 @@
+# Circuit Python Libraries Required
+# Copy these files to your CIRCUITPY/lib directory
+
+# Core networking libraries
+adafruit_requests.mpy
+adafruit_connection_manager.mpy
+
+# Display libraries
+adafruit_display_text/
+adafruit_bitmap_font/
+
+# Additional dependencies that may be needed:
+# adafruit_esp32spi/ (if using ESP32-based boards)
+# adafruit_wiznet5k/ (if using Ethernet)

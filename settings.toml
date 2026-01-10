@@ -1,0 +1,10 @@
+# WiFi Configuration
+WIFI_SSID = "your_wifi_network"
+WIFI_PASSWORD = "your_wifi_password"
+
+# Optional: NOAA Station Configuration  
+# Station ID for St. Petersburg, FL (default)
+TIDE_STATION = "8726724"
+
+# Update interval in seconds (default: 3600 = 1 hour)
+UPDATE_INTERVAL = 3600
