@@ -8,3 +8,7 @@ TIDE_STATION = "8726724"
 
 # Update interval in seconds (default: 3600 = 1 hour)
 UPDATE_INTERVAL = 3600
+
+# Time Settings
+NTP_SERVER = 'time.google.com'
+TIMEZONE_OFFSET = -5          # EST = -5, adjust for your location

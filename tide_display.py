@@ -7,12 +7,16 @@ import time
 import board
 from adafruit_ht16k33.matrix import Matrix8x8x2
 import os
+import rtc
+import adafruit_ntp
 
 # Load WiFi credentials from settings.toml
 WIFI_SSID = os.getenv('WIFI_SSID')
 WIFI_PASSWORD = os.getenv('WIFI_PASSWORD')
 TIDE_STATION = os.getenv('TIDE_STATION', '8726724')  # Default to St. Petersburg, FL
 UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '3600'))  # Default to 1 hour
+NTP_SERVER = os.getenv('NTP_SERVER', 'time.google.com')
+TIMEZONE_OFFSET = int(os.getenv('TIMEZONE_OFFSET', '-5'))  # Default to EST
 
 # NOAA API endpoint
 API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
@@ -53,8 +57,28 @@ class SimpleTideDisplay:
             pool = socketpool.SocketPool(wifi.radio)
             self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
             
+            # Sync time with NTP server after WiFi connection
+            self.sync_time(pool)
+            
         except Exception as e:
             print(f"Network setup failed: {e}")
+            
+    def sync_time(self, pool):
+        """Sync local time with NTP server"""
+        try:
+            print(f"Syncing time with {NTP_SERVER}...")
+            ntp = adafruit_ntp.NTP(pool, server=NTP_SERVER, tz_offset=TIMEZONE_OFFSET)
+            
+            # Set the RTC time
+            rtc.RTC().datetime = ntp.datetime
+            
+            current_time = time.localtime()
+            print(f"Local time set to: {current_time.tm_year}-{current_time.tm_mon:02d}-{current_time.tm_mday:02d} "
+                  f"{current_time.tm_hour:02d}:{current_time.tm_min:02d}:{current_time.tm_sec:02d}")
+            
+        except Exception as e:
+            print(f"Time sync failed: {e}")
+            print("Continuing with system time...")
             
     def fetch_tide_data(self):
         """Fetch tide data from NOAA API"""
@@ -78,6 +102,11 @@ class SimpleTideDisplay:
             
             # Construct URL with parameters
             url_with_params = API_URL + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
+            
+            # Print current date and time
+            current_time = time.localtime()
+            print(f"Current time: {current_time.tm_year}-{current_time.tm_mon:02d}-{current_time.tm_mday:02d} "
+                  f"{current_time.tm_hour:02d}:{current_time.tm_min:02d}:{current_time.tm_sec:02d}")
             
             print("Fetching tide data...")
             print(f"URL: {url_with_params}")
