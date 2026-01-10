@@ -185,15 +185,8 @@ class SimpleTideDisplay:
                 # Matrix3: x=0 is 4PM, x=1 is 5PM, etc.
                 matrix_x = hour_offset  # Direct mapping: 0-7 for each matrix
                 
-                # Display vertical bar for this hour up to the tide level
-                for tide_level_y in range(level + 1):  # 0 up to current level
-                    # Choose color based on tide level
-                    if level >= 6:
-                        matrix[matrix_x, tide_level_y] = matrix.LED_RED     # High tide - Red
-                    elif level >= 3:
-                        matrix[matrix_x, tide_level_y] = matrix.LED_YELLOW  # Medium tide - Yellow  
-                    else:
-                        matrix[matrix_x, tide_level_y] = matrix.LED_GREEN   # Low tide - Green
+                # Display single red LED point at the tide level for this hour
+                matrix[matrix_x, level] = matrix.LED_RED
         
         print("Tide data displayed on LED matrices")
     
