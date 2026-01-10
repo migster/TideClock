@@ -14,9 +14,28 @@ import adafruit_ntp
 WIFI_SSID = os.getenv('WIFI_SSID')
 WIFI_PASSWORD = os.getenv('WIFI_PASSWORD')
 TIDE_STATION = os.getenv('TIDE_STATION', '8726724')  # Default to St. Petersburg, FL
-UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '3600'))  # Default to 1 hour
-NTP_SERVER = os.getenv('NTP_SERVER', 'time.google.com')
-TIMEZONE_OFFSET = int(os.getenv('TIMEZONE_OFFSET', '-5'))  # Default to EST
+
+# Handle UPDATE_INTERVAL with error checking
+try:
+    update_val = os.getenv('UPDATE_INTERVAL', 3600)  # Use integer default
+    UPDATE_INTERVAL = int(update_val) if not isinstance(update_val, int) else update_val
+except (ValueError, AttributeError) as e:
+    print(f"Error parsing UPDATE_INTERVAL: {e}")
+    UPDATE_INTERVAL = 3600  # Default to 1 hour
+
+# Handle TIMEZONE_OFFSET with error checking  
+try:
+    tz_val = os.getenv('TIMEZONE_OFFSET', -5)  # Use integer default
+    TIMEZONE_OFFSET = int(tz_val) if not isinstance(tz_val, int) else tz_val
+except (ValueError, AttributeError) as e:
+    print(f"Error parsing TIMEZONE_OFFSET: {e}")
+    TIMEZONE_OFFSET = -5  # Default to EST
+
+try:
+    NTP_SERVER = os.getenv('NTP_SERVER', 'time.google.com')
+except Exception as e:
+    print(f"Error with NTP_SERVER: {e}")
+    NTP_SERVER = 'time.google.com'
 
 # NOAA API endpoint
 API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
@@ -191,6 +210,10 @@ class SimpleTideDisplay:
             
         normalized_data = self.normalize_tide_levels(tide_data)
         
+        # Get current hour for highlighting
+        current_time = time.localtime()
+        current_hour = current_time.tm_hour
+        
         # Clear matrices first
         self.clear_matrices()
         
@@ -214,8 +237,16 @@ class SimpleTideDisplay:
                 # Matrix3: x=0 is 4PM, x=1 is 5PM, etc.
                 matrix_x = hour_offset  # Direct mapping: 0-7 for each matrix
                 
-                # Display single red LED point at the tide level for this hour
-                matrix[matrix_x, level] = matrix.LED_RED
+                # Calculate the actual hour this represents
+                actual_hour = start_hour + hour_offset
+                
+                # Display single LED point at the tide level for this hour
+                # Use yellow for current hour, red for all others
+                if actual_hour == current_hour:
+                    matrix[matrix_x, level] = matrix.LED_YELLOW  # Current hour in yellow
+                    print(f"Current hour ({current_hour}:00) highlighted in yellow on matrix {matrix_idx + 1}")
+                else:
+                    matrix[matrix_x, level] = matrix.LED_RED     # Other hours in red
         
         print("Tide data displayed on LED matrices")
     
