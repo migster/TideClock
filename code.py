@@ -270,23 +270,45 @@ class SimpleTideDisplay:
         """Run the tide display continuously (updates every hour)"""
         print("Starting Tide Clock (Continuous Mode)...")
         
+        last_hour = -1       # Track the last hour we displayed
+        last_date = None     # Track the last date we fetched data for
+        tide_data = None     # Store current tide data
+        
         while True:
             try:
-                tide_data = self.fetch_tide_data()
-                if tide_data:
-                    # Display on both serial console and LED matrices
-                    self.display_ascii_chart(tide_data)
-                    self.display_on_matrices(tide_data)
-                    print("Next update in 1 hour...")
-                else:
-                    print("Failed to get tide data")
-                    self.show_error_on_matrices()
-                    print("Retrying in 10 minutes...")
-                    time.sleep(600)  # Wait 10 minutes before retry
-                    continue
+                current_time = time.localtime()
+                current_hour = current_time.tm_hour
+                current_date = (current_time.tm_year, current_time.tm_mon, current_time.tm_mday)
                 
-                # Wait 1 hour before next update
-                time.sleep(UPDATE_INTERVAL)
+                # Check if we need to fetch new tide data (first boot or new day)
+                if tide_data is None or (last_date is not None and current_date != last_date):
+                    if last_date is not None:
+                        print("New day detected, fetching updated tide data...")
+                    else:
+                        print("Initial startup, fetching tide data...")
+                    
+                    new_tide_data = self.fetch_tide_data()
+                    if new_tide_data:
+                        tide_data = new_tide_data
+                        last_date = current_date
+                        # Display on serial console when we get new data
+                        self.display_ascii_chart(tide_data)
+                        print("Tide data will refresh again after midnight...")
+                    else:
+                        print("Failed to get tide data")
+                        self.show_error_on_matrices()
+                        print("Retrying in 10 minutes...")
+                        time.sleep(600)  # Wait 10 minutes before retry
+                        continue
+                
+                # Check if the hour has changed and we have tide data
+                if current_hour != last_hour and tide_data is not None:
+                    print(f"Hour changed from {last_hour} to {current_hour}, updating matrix display...")
+                    self.display_on_matrices(tide_data)
+                    last_hour = current_hour
+                
+                # Sleep for 30 seconds before checking again
+                time.sleep(30)
                 
             except Exception as e:
                 print(f"Error in main loop: {e}")
@@ -323,7 +345,7 @@ class SimpleTideDisplay:
         for i, (time_str, _) in enumerate(normalized_data[:24]):
             if i % 4 == 0:
                 hour = time_str.split(' ')[1].split(':')[0]  # Extract hour
-                hour_line += f"{hour:>2}" + "  " * 3
+                hour_line += f"{hour:>2}"
             else:
                 hour_line += "  "
         print(hour_line)
@@ -363,8 +385,8 @@ def main():
     
     tide_display = SimpleTideDisplay()
     
-    # Choose mode: run_once() for testing, run_continuous() for production
-    tide_display.run_once()  # Change to run_continuous() for continuous updates
+    # Run in continuous mode for clock-like behavior
+    tide_display.run_continuous()
 
 if __name__ == "__main__":
     main()
