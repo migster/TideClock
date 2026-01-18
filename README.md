@@ -172,7 +172,9 @@ Where:
 - **Modular Design**: Test scripts for debugging individual components
 
 ## License
-This project is open source. Feel free to modify and adapt for your needs.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
+
+This is free software: you are free to change and redistribute it under the terms of the GPL v3. There is NO WARRANTY, to the extent permitted by law.
 
 ## Contributing
 Test scripts in the `/tests` directory can help with development and debugging:
