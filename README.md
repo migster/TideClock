@@ -36,9 +36,14 @@ TIDE_STATION = "8726724"
 UPDATE_INTERVAL = 3600
 
 # Time Settings
-NTP_SERVER = 'time.google.com'
+NTP_SERVER = "time.google.com"
 TIMEZONE_OFFSET = -5          # EST = -5, adjust for your location
+
+# LED Matrix Settings
+LED_BRIGHTNESS = "0.5"        # LED brightness (0.0 = off, 1.0 = full brightness)
 ```
+
+**Note:** String values (NTP_SERVER, LED_BRIGHTNESS) should use double quotes for proper CircuitPython TOML parsing.
 
 ### 4. Hardware Connections
 Connect three 8x8 LED matrices to I2C:
@@ -91,6 +96,13 @@ Modify data refresh interval in `settings.toml`:
 ```toml
 UPDATE_INTERVAL = 3600  # seconds (3600 = 1 hour)
 ```
+
+### LED Brightness
+Adjust the brightness of the LED matrices in `settings.toml`:
+```toml
+LED_BRIGHTNESS = "0.5"  # Range: "0.0" (off) to "1.0" (full brightness)
+```
+This setting controls the brightness of all three LED matrices. Lower values help reduce power consumption and may be more comfortable for indoor use.
 
 ### Matrix Colors and Patterns
 Colors are defined in the code and can be modified:

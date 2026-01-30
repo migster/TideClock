@@ -17,19 +17,33 @@ TIDE_STATION = os.getenv('TIDE_STATION', '8726724')  # Default to St. Petersburg
 
 # Handle UPDATE_INTERVAL with error checking
 try:
-    update_val = os.getenv('UPDATE_INTERVAL', 3600)  # Use integer default
-    UPDATE_INTERVAL = int(update_val) if not isinstance(update_val, int) else update_val
+    update_val = os.getenv('UPDATE_INTERVAL', '3600')  # Default as string
+    print(f"UPDATE_INTERVAL raw value: {update_val}")
+    UPDATE_INTERVAL = int(float(update_val))  # Convert via float first to handle decimals
+    print(f"UPDATE_INTERVAL parsed: {UPDATE_INTERVAL}")
 except (ValueError, AttributeError) as e:
     print(f"Error parsing UPDATE_INTERVAL: {e}")
     UPDATE_INTERVAL = 3600  # Default to 1 hour
 
 # Handle TIMEZONE_OFFSET with error checking  
 try:
-    tz_val = os.getenv('TIMEZONE_OFFSET', -5)  # Use integer default
-    TIMEZONE_OFFSET = int(tz_val) if not isinstance(tz_val, int) else tz_val
+    tz_val = os.getenv('TIMEZONE_OFFSET', '-5')  # Default as string
+    print(f"TIMEZONE_OFFSET raw value: {tz_val}")
+    TIMEZONE_OFFSET = int(float(tz_val))  # Convert via float first to handle decimals
+    print(f"TIMEZONE_OFFSET parsed: {TIMEZONE_OFFSET}")
 except (ValueError, AttributeError) as e:
     print(f"Error parsing TIMEZONE_OFFSET: {e}")
     TIMEZONE_OFFSET = -5  # Default to EST
+
+# Handle LED_BRIGHTNESS with error checking
+try:
+    brightness_str = os.getenv('LED_BRIGHTNESS', '1.0')
+    LED_BRIGHTNESS = float(brightness_str)
+    LED_BRIGHTNESS = max(0.0, min(1.0, LED_BRIGHTNESS))  # Clamp to valid range
+    print(f"LED_BRIGHTNESS loaded: {LED_BRIGHTNESS}")
+except (ValueError, TypeError) as e:
+    print(f"Error parsing LED_BRIGHTNESS, using default: {e}")
+    LED_BRIGHTNESS = 1.0
 
 try:
     NTP_SERVER = os.getenv('NTP_SERVER', 'time.google.com')
@@ -51,10 +65,12 @@ class SimpleTideDisplay:
             print("Setting up LED matrices...")
             i2c = board.I2C()
             
-            # Initialize the three 8x8 matrices
-            self.matrix1 = Matrix8x8x2(i2c, address=0x70)  # First 8 hours (left)
-            self.matrix2 = Matrix8x8x2(i2c, address=0x71)  # Middle 8 hours (center) 
-            self.matrix3 = Matrix8x8x2(i2c, address=0x72)  # Last 8 hours (right)
+            # Initialize the three 8x8 matrices with brightness parameter
+            self.matrix1 = Matrix8x8x2(i2c, address=0x70, brightness=LED_BRIGHTNESS)  # First 8 hours (left)
+            self.matrix2 = Matrix8x8x2(i2c, address=0x71, brightness=LED_BRIGHTNESS)  # Middle 8 hours (center) 
+            self.matrix3 = Matrix8x8x2(i2c, address=0x72, brightness=LED_BRIGHTNESS)  # Last 8 hours (right)
+            
+            print(f"LED brightness set to {LED_BRIGHTNESS:.2f}")
             
             # Clear all matrices
             self.clear_matrices()
