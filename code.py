@@ -2,30 +2,23 @@ import wifi
 import socketpool
 import ssl
 import adafruit_requests
-import json
 import time
 import board
 from adafruit_ht16k33.matrix import Matrix8x8x2
 import os
 import rtc
 import adafruit_ntp
+import gc
+import microcontroller
+from microcontroller import watchdog as wdt
+from watchdog import WatchDogMode
 
 # Load WiFi credentials from settings.toml
 WIFI_SSID = os.getenv('WIFI_SSID')
 WIFI_PASSWORD = os.getenv('WIFI_PASSWORD')
 TIDE_STATION = os.getenv('TIDE_STATION', '8726724')  # Default to St. Petersburg, FL
 
-# Handle UPDATE_INTERVAL with error checking
-try:
-    update_val = os.getenv('UPDATE_INTERVAL', '3600')  # Default as string
-    print(f"UPDATE_INTERVAL raw value: {update_val}")
-    UPDATE_INTERVAL = int(float(update_val))  # Convert via float first to handle decimals
-    print(f"UPDATE_INTERVAL parsed: {UPDATE_INTERVAL}")
-except (ValueError, AttributeError) as e:
-    print(f"Error parsing UPDATE_INTERVAL: {e}")
-    UPDATE_INTERVAL = 3600  # Default to 1 hour
-
-# Handle TIMEZONE_OFFSET with error checking  
+# Handle TIMEZONE_OFFSET with error checking
 try:
     tz_val = os.getenv('TIMEZONE_OFFSET', '-5')  # Default as string
     print(f"TIMEZONE_OFFSET raw value: {tz_val}")
@@ -51,13 +44,46 @@ except Exception as e:
     print(f"Error with NTP_SERVER: {e}")
     NTP_SERVER = 'time.google.com'
 
+# Serial "display mirror": set DISPLAY_DUMP="0" in settings.toml to silence.
+DISPLAY_DUMP = os.getenv('DISPLAY_DUMP', '1') == '1'
+
 # NOAA API endpoint
 API_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 
+# 3x5 pixel font for digits 0-9 and colon/slash
+# Each character is 3 columns wide, 5 rows tall, stored as column bitmasks (LSB = top row)
+FONT_3X5 = {
+    '0': (0x1F, 0x11, 0x1F),
+    '1': (0x00, 0x1F, 0x00),
+    '2': (0x1D, 0x15, 0x17),
+    '3': (0x15, 0x15, 0x1F),
+    '4': (0x07, 0x04, 0x1F),
+    '5': (0x17, 0x15, 0x1D),
+    '6': (0x1F, 0x15, 0x1D),
+    '7': (0x01, 0x01, 0x1F),
+    '8': (0x1F, 0x15, 0x1F),
+    '9': (0x17, 0x15, 0x1F),
+    '/': (0x18, 0x04, 0x03),
+    ':': (0x00, 0x0A, 0x00),
+}
+
 class SimpleTideDisplay:
     def __init__(self):
+        self.pool = None          # Socket pool for NTP re-sync
+        self.last_ntp_sync = None # Track last NTP sync date
+        self._wdt_feed_warned = False  # One-shot log guard for WDT feed errors
+        self.setup_watchdog()
         self.setup_matrices()
         self.setup_network()
+        
+    def setup_watchdog(self):
+        """Initialize watchdog timer to auto-reboot on hangs"""
+        try:
+            wdt.timeout = 60  # Reboot if not fed within 60 seconds
+            wdt.mode = WatchDogMode.RESET
+            print("Watchdog timer enabled (60s timeout)")
+        except Exception as e:
+            print(f"Watchdog setup failed: {e}")
         
     def setup_matrices(self):
         """Initialize the LED matrices"""
@@ -74,7 +100,13 @@ class SimpleTideDisplay:
             
             # Clear all matrices
             self.clear_matrices()
+            
+            # Stage 1: matrices alive — light corner pixel on each matrix
+            self.matrix1[0, 0] = self.matrix1.LED_GREEN
+            self.matrix2[0, 0] = self.matrix2.LED_GREEN
+            self.matrix3[0, 0] = self.matrix3.LED_GREEN
             print("LED matrices initialized successfully")
+            self.dump_display("boot: matrices alive")
             
         except Exception as e:
             print(f"Matrix setup failed: {e}")
@@ -85,18 +117,56 @@ class SimpleTideDisplay:
     def setup_network(self):
         """Initialize WiFi connection and requests session"""
         try:
+            has_matrices = self.matrix1 and self.matrix2 and self.matrix3
+            
+            # Stage 2: WiFi connecting — yellow spinner on matrix2
+            if has_matrices:
+                self.matrix1[0, 0] = self.matrix1.LED_GREEN   # Stage 1 done
+                self.matrix2[0, 0] = self.matrix2.LED_YELLOW  # WiFi in progress
+                self.dump_display("boot: wifi connecting")
+
             print("Connecting to WiFi...")
             wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
             print(f"Connected to {WIFI_SSID}")
             
-            pool = socketpool.SocketPool(wifi.radio)
-            self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
+            # Stage 2 done — WiFi connected
+            if has_matrices:
+                self.matrix2[0, 0] = self.matrix2.LED_GREEN
+                self.dump_display("boot: wifi connected")
+
+            self.pool = socketpool.SocketPool(wifi.radio)
+            self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
             
-            # Sync time with NTP server after WiFi connection
-            self.sync_time(pool)
+            # Stage 3: NTP syncing — yellow on matrix3
+            if has_matrices:
+                self.matrix3[0, 0] = self.matrix3.LED_YELLOW
+                self.dump_display("boot: ntp syncing")
+
+            print("Syncing NTP...")
+            self.sync_time(self.pool)
+            self.last_ntp_sync = time.localtime().tm_mday
+            
+            # Stage 3 done — all green
+            if has_matrices:
+                self.matrix3[0, 0] = self.matrix3.LED_GREEN
+                self.dump_display("boot: all stages green")
+
+            time.sleep(1)  # Brief pause so you can see all-green
+            
+            # Show date/time on matrices to confirm sync
+            self.show_boot_info()
+            
+            gc.collect()
+            print(f"Free memory after setup: {gc.mem_free()} bytes")
             
         except Exception as e:
             print(f"Network setup failed: {e}")
+            # Show red on whichever stage failed
+            if self.matrix1 and self.matrix2 and self.matrix3:
+                for m in [self.matrix1, self.matrix2, self.matrix3]:
+                    if m[0, 0] != m.LED_GREEN:
+                        m[0, 0] = m.LED_RED
+                self.dump_display("boot: setup error")
             
     def check_wifi_connection(self):
         """Check if WiFi is still connected"""
@@ -111,18 +181,21 @@ class SimpleTideDisplay:
             try:
                 print(f"WiFi reconnection attempt {attempt + 1}/{max_attempts}...")
                 wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
-                
+
                 # Recreate the requests session with new socket pool
-                pool = socketpool.SocketPool(wifi.radio)
-                self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
-                
+                self.pool = socketpool.SocketPool(wifi.radio)
+                self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
+
                 print(f"WiFi reconnected successfully to {WIFI_SSID}")
                 return True
                 
             except Exception as e:
                 print(f"WiFi reconnection attempt {attempt + 1} failed: {e}")
                 if attempt < max_attempts - 1:
-                    time.sleep(5 * (attempt + 1))  # Exponential backoff: 5s, 10s, 15s
+                    wait = 5 * (attempt + 1)
+                    for _ in range(wait):
+                        self.feed_watchdog()
+                        time.sleep(1)
                     
         print("WiFi reconnection failed after all attempts")
         return False
@@ -136,8 +209,8 @@ class SimpleTideDisplay:
                 
             # Try to recreate session if needed
             if not hasattr(self, 'requests') or self.requests is None:
-                pool = socketpool.SocketPool(wifi.radio)
-                self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
+                self.pool = socketpool.SocketPool(wifi.radio)
+                self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
                 
             return True
             
@@ -161,7 +234,143 @@ class SimpleTideDisplay:
         except Exception as e:
             print(f"Time sync failed: {e}")
             print("Continuing with system time...")
+
+    def feed_watchdog(self):
+        """Feed the watchdog timer to prevent reboot"""
+        try:
+            wdt.feed()
+        except Exception as e:
+            if not self._wdt_feed_warned:
+                print(f"Watchdog feed failed (further errors suppressed): {e}")
+                self._wdt_feed_warned = True
+
+    def maybe_resync_ntp(self):
+        """Re-sync NTP daily at 3 AM to prevent clock drift"""
+        current_time = time.localtime()
+        if current_time.tm_hour == 3 and self.last_ntp_sync != current_time.tm_mday:
+            print("Daily NTP re-sync triggered...")
+            try:
+                if not self.check_wifi_connection():
+                    self.reconnect_wifi()
+                if self.pool is None:
+                    self.pool = socketpool.SocketPool(wifi.radio)
+                self.sync_time(self.pool)
+                self.last_ntp_sync = current_time.tm_mday
+                print("NTP re-sync complete")
+            except Exception as e:
+                print(f"NTP re-sync failed: {e}")
+
+    def dump_display(self, label=""):
+        """Print a colored 24x8 snapshot of all three matrices to serial."""
+        if not DISPLAY_DUMP:
+            return
+        if not (self.matrix1 and self.matrix2 and self.matrix3):
+            return
+        try:
+            t = time.localtime()
+            ts = f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}"
+            print(f"--- dump[{ts}] {label} ---")
+            RESET = "\x1b[0m"
+            # 0=OFF 1=RED 2=GREEN 3=YELLOW (HT16K33 Matrix8x8x2 values)
+            colors = {0: "\x1b[38;5;238m", 1: "\x1b[91m",
+                      2: "\x1b[92m", 3: "\x1b[93m"}
+            # Iterate y from 7 down to 0 so the dump matches physical display
+            # orientation (matrix row 0 is at the bottom of the real panel).
+            for y in range(7, -1, -1):
+                row = ""
+                for mi, m in enumerate((self.matrix1, self.matrix2, self.matrix3)):
+                    if mi:
+                        row += RESET + "|"
+                    for x in range(8):
+                        try:
+                            c = m[x, y]
+                        except Exception:
+                            c = 0
+                        row += colors.get(c, "") + "\u2588\u2588"
+                print(row + RESET)
+        except Exception as e:
+            print(f"dump_display error: {e}")
+
+    def _draw_char(self, matrix, char, x_offset, y_offset, color):
+        """Draw a single 3x5 character on a matrix at the given offset"""
+        cols = FONT_3X5.get(char)
+        if not cols:
+            return
+        for cx, col_bits in enumerate(cols):
+            for ry in range(5):
+                if col_bits & (1 << ry):
+                    px = x_offset + cx
+                    py = y_offset + (4 - ry)  # Flip vertically so top row draws at higher Y
+                    if 0 <= px < 8 and 0 <= py < 8:
+                        matrix[px, py] = color
+
+    def _draw_string(self, matrix, text, y_offset, color):
+        """Draw a short string centered on an 8x8 matrix"""
+        # Each char is 3px wide + 1px gap
+        total_width = len(text) * 4 - 1
+        x_start = max(0, (8 - total_width) // 2)
+        for i, ch in enumerate(text):
+            self._draw_char(matrix, ch, x_start + i * 4, y_offset, color)
+
+    def show_boot_info(self):
+        """Show date then time across all 3 matrices on boot"""
+        if not (self.matrix1 and self.matrix2 and self.matrix3):
+            print("Cannot show boot info - matrices not available")
+            return
+
+        current_time = time.localtime()
+        month_str = f"{current_time.tm_mon:02d}"
+        day_str = f"{current_time.tm_mday:02d}"
+        hour_str = f"{current_time.tm_hour:02d}"
+        min_str = f"{current_time.tm_min:02d}"
+
+        # --- Phase 1: Date across all 3 matrices (MM / DD) ---
+        self.clear_matrices()
+        # Matrix 1: month (MM) in green, centered
+        self._draw_string(self.matrix1, month_str, 1, self.matrix1.LED_GREEN)
+        # Matrix 2: slash in green, centered
+        self._draw_string(self.matrix2, "/", 1, self.matrix2.LED_GREEN)
+        # Matrix 3: day (DD) in green, centered
+        self._draw_string(self.matrix3, day_str, 1, self.matrix3.LED_GREEN)
+
+        print(f"Boot display: {month_str} / {day_str}")
+        self.dump_display(f"boot: date {month_str}/{day_str}")
+        print("Showing date for 3 seconds...")
+        time.sleep(3)
+
+        # --- Phase 2: Time across all 3 matrices (HH : MM) ---
+        self.clear_matrices()
+        # Matrix 1: hours (HH) in green, centered
+        self._draw_string(self.matrix1, hour_str, 1, self.matrix1.LED_GREEN)
+        # Matrix 2: colon in green, centered
+        self._draw_string(self.matrix2, ":", 1, self.matrix2.LED_GREEN)
+        # Matrix 3: minutes (MM) in green, centered
+        self._draw_string(self.matrix3, min_str, 1, self.matrix3.LED_GREEN)
+
+        print(f"Boot display: {hour_str} : {min_str}")
+        self.dump_display(f"boot: time {hour_str}:{min_str}")
+        print("Showing time for 3 seconds...")
+        time.sleep(3)
+
+        self.clear_matrices()
+        self.dump_display("boot: cleared")
+        print("Boot sequence complete, loading tide data...")
             
+    def show_api_status(self, status):
+        """Show API fetch status on matrix1 corner pixel.
+        'fetching' = yellow, 'ok' = green, 'fail' = red, 'clear' = off"""
+        if not self.matrix1:
+            return
+        if status == 'fetching':
+            self.matrix1[7, 7] = self.matrix1.LED_YELLOW
+        elif status == 'ok':
+            self.matrix1[7, 7] = self.matrix1.LED_GREEN
+        elif status == 'fail':
+            self.matrix1[7, 7] = self.matrix1.LED_RED
+        elif status == 'clear':
+            self.matrix1[7, 7] = 0
+        self.dump_display(f"api status: {status}")
+
     def fetch_tide_data(self, max_retries=3):
         """Fetch tide data from NOAA API with retry logic"""
         last_error = None
@@ -177,8 +386,8 @@ class SimpleTideDisplay:
                 # Ensure we have a valid requests session
                 if not hasattr(self, 'requests') or self.requests is None:
                     print("Creating new requests session...")
-                    pool = socketpool.SocketPool(wifi.radio)
-                    self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
+                    self.pool = socketpool.SocketPool(wifi.radio)
+                    self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
                 
                 # Get current date in YYYYMMDD format
                 current_time = time.localtime()
@@ -210,12 +419,17 @@ class SimpleTideDisplay:
                 
                 response = self.requests.get(url_with_params, timeout=30)
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    print("Tide data received successfully")
-                    return self.parse_tide_data(data)
-                else:
-                    raise Exception(f"API request failed with status: {response.status_code}, Response: {response.text}")
+                try:
+                    if response.status_code == 200:
+                        data = response.json()
+                        print("Tide data received successfully")
+                        return self.parse_tide_data(data)
+                    else:
+                        raise Exception(f"API request failed with status: {response.status_code}, Response: {response.text}")
+                finally:
+                    response.close()
+                    gc.collect()
+                    print(f"Free memory after fetch: {gc.mem_free()} bytes")
                     
             except Exception as e:
                 last_error = e
@@ -225,8 +439,8 @@ class SimpleTideDisplay:
                 if "socket" in str(e).lower():
                     print("Socket error detected, recreating session...")
                     try:
-                        pool = socketpool.SocketPool(wifi.radio)
-                        self.requests = adafruit_requests.Session(pool, ssl.create_default_context())
+                        self.pool = socketpool.SocketPool(wifi.radio)
+                        self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
                     except Exception as session_error:
                         print(f"Session recreation failed: {session_error}")
                 
@@ -234,7 +448,9 @@ class SimpleTideDisplay:
                     # Exponential backoff: 30s, 60s, 120s
                     wait_time = 30 * (2 ** attempt)
                     print(f"Waiting {wait_time} seconds before retry...")
-                    time.sleep(wait_time)
+                    for _ in range(wait_time // 10):
+                        self.feed_watchdog()
+                        time.sleep(10)
                     
         print(f"All {max_retries} attempts failed. Last error: {last_error}")
         return None
@@ -341,8 +557,9 @@ class SimpleTideDisplay:
                     print(f"Current hour ({current_hour}:00) highlighted in yellow on matrix {matrix_idx + 1}")
                 else:
                     matrix[matrix_x, level] = matrix.LED_RED     # Other hours in red
-        
+
         print("Tide data displayed on LED matrices")
+        self.dump_display(f"tide chart (current hour {current_hour:02d})")
     
     def show_error_on_matrices(self):
         """Show error pattern on matrices when data fetch fails"""
@@ -357,8 +574,9 @@ class SimpleTideDisplay:
         for i in range(8):
             matrix[i, i] = matrix.LED_RED      # Main diagonal
             matrix[i, 7-i] = matrix.LED_RED    # Counter diagonal
-            
+
         print("Error pattern displayed on LED matrices")
+        self.dump_display("error X pattern")
         
     def show_safe_mode_on_matrices(self):
         """Show safe mode pattern for extended failures"""
@@ -377,8 +595,39 @@ class SimpleTideDisplay:
                 matrix[7, i] = matrix.LED_YELLOW    # Bottom row
                 matrix[i, 0] = matrix.LED_YELLOW    # Left column
                 matrix[i, 7] = matrix.LED_YELLOW    # Right column
-                
+
         print("Safe mode pattern displayed on LED matrices")
+        self.dump_display("safe mode border")
+    
+    def display_on_matrices_stale(self, tide_data):
+        """Display tide data with stale indicator (green dots instead of red)"""
+        if not tide_data or not (self.matrix1 and self.matrix2 and self.matrix3):
+            return
+            
+        normalized_data = self.normalize_tide_levels(tide_data)
+        current_time = time.localtime()
+        current_hour = current_time.tm_hour
+        
+        self.clear_matrices()
+        
+        matrices = [self.matrix1, self.matrix2, self.matrix3]
+        
+        for matrix_idx, matrix in enumerate(matrices):
+            start_hour = matrix_idx * 8
+            matrix_data = normalized_data[start_hour:start_hour + 8]
+            
+            for hour_offset, (time_str, level) in enumerate(matrix_data):
+                if hour_offset >= 8:
+                    break
+                actual_hour = start_hour + hour_offset
+                # Use green for all points to indicate stale/yesterday's data
+                if actual_hour == current_hour:
+                    matrix[hour_offset, level] = matrix.LED_YELLOW
+                else:
+                    matrix[hour_offset, level] = matrix.LED_GREEN
+
+        print("Stale tide data displayed on LED matrices (green = yesterday's data)")
+        self.dump_display(f"stale tide (current hour {current_hour:02d})")
     
     def run_continuous(self):
         """Run the tide display continuously (updates every hour)"""
@@ -390,12 +639,19 @@ class SimpleTideDisplay:
         consecutive_failures = 0  # Track consecutive API failures
         max_failures = 5     # Enter safe mode after this many failures
         in_safe_mode = False # Flag for safe mode operation
+        data_is_stale = False  # Flag for stale (yesterday's) data
         
         while True:
             try:
+                # Feed watchdog at the start of each loop
+                self.feed_watchdog()
+                
                 current_time = time.localtime()
                 current_hour = current_time.tm_hour
                 current_date = (current_time.tm_year, current_time.tm_mon, current_time.tm_mday)
+                
+                # Daily NTP re-sync at 3 AM
+                self.maybe_resync_ntp()
                 
                 # Check WiFi status periodically
                 if not self.check_wifi_connection():
@@ -412,12 +668,16 @@ class SimpleTideDisplay:
                     else:
                         print("Initial startup, fetching tide data...")
                     
+                    self.show_api_status('fetching')
                     new_tide_data = self.fetch_tide_data()
+                    # Show result on LED
+                    self.show_api_status('ok' if new_tide_data else 'fail')
                     if new_tide_data:
                         tide_data = new_tide_data
                         last_date = current_date
                         consecutive_failures = 0  # Reset failure count
                         in_safe_mode = False      # Exit safe mode
+                        data_is_stale = False     # Fresh data
                         
                         # Display on serial console when we get new data
                         self.display_ascii_chart(tide_data)
@@ -426,11 +686,20 @@ class SimpleTideDisplay:
                         consecutive_failures += 1
                         print(f"Failed to get tide data (failure #{consecutive_failures})")
                         
+                        # Mark data as stale if we had data from a previous day
+                        if tide_data is not None and last_date is not None and current_date != last_date:
+                            data_is_stale = True
+                            print("Warning: displaying stale data from previous day")
+                        
                         # Enter safe mode after too many failures
                         if consecutive_failures >= max_failures and not in_safe_mode:
                             print(f"Entering safe mode after {consecutive_failures} consecutive failures")
                             in_safe_mode = True
                             self.show_safe_mode_on_matrices()
+                        elif data_is_stale and tide_data is not None:
+                            # Show yesterday's data in green as a stale indicator
+                            self.display_on_matrices_stale(tide_data)
+                            last_hour = current_hour
                         else:
                             self.show_error_on_matrices()
                         
@@ -443,13 +712,19 @@ class SimpleTideDisplay:
                             retry_delay = 1800  # 30 minutes for extended failures
                             
                         print(f"Retrying in {retry_delay // 60} minutes...")
-                        time.sleep(retry_delay)
+                        # Feed watchdog during long retry waits
+                        for _ in range(retry_delay // 10):
+                            self.feed_watchdog()
+                            time.sleep(10)
                         continue
                 
                 # Check if the hour has changed and we have tide data
                 if current_hour != last_hour and tide_data is not None:
                     print(f"Hour changed from {last_hour} to {current_hour}, updating matrix display...")
-                    self.display_on_matrices(tide_data)
+                    if data_is_stale:
+                        self.display_on_matrices_stale(tide_data)
+                    else:
+                        self.display_on_matrices(tide_data)
                     last_hour = current_hour
                 
                 # In safe mode, show different pattern periodically
@@ -457,7 +732,11 @@ class SimpleTideDisplay:
                     self.show_safe_mode_on_matrices()
                 
                 # Sleep for 30 seconds before checking again
-                time.sleep(30)
+                # Feed watchdog and collect garbage during sleep
+                gc.collect()
+                for _ in range(3):
+                    self.feed_watchdog()
+                    time.sleep(10)
                 
             except Exception as e:
                 print(f"Error in main loop: {e}")
@@ -467,7 +746,10 @@ class SimpleTideDisplay:
                 # Progressive error recovery delays
                 error_delay = min(300 * consecutive_failures, 1800)  # Max 30 minutes
                 print(f"Waiting {error_delay // 60} minutes before retry...")
-                time.sleep(error_delay)
+                # Feed watchdog during long error waits
+                for _ in range(error_delay // 10):
+                    self.feed_watchdog()
+                    time.sleep(10)
     
     def display_ascii_chart(self, tide_data):
         """Display tide chart as ASCII art in console"""
@@ -498,33 +780,44 @@ class SimpleTideDisplay:
         hour_line = "   "
         for i, (time_str, _) in enumerate(normalized_data[:24]):
             if i % 4 == 0:
-                hour = time_str.split(' ')[1].split(':')[0]  # Extract hour
+                try:
+                    hour = time_str.split(' ')[1].split(':')[0]
+                except (IndexError, AttributeError):
+                    hour = "??"
                 hour_line += f"{hour:>2}"
             else:
                 hour_line += "  "
         print(hour_line)
         
-        print(f"\nDate: {normalized_data[0][0].split(' ')[0] if normalized_data else 'Unknown'}")
-        print(f"Location: St. Petersburg, FL (Station 8726724)")
+        date_label = "Unknown"
+        if normalized_data:
+            try:
+                date_label = normalized_data[0][0].split(' ')[0]
+            except (IndexError, AttributeError):
+                pass
+        print(f"\nDate: {date_label}")
+        print(f"Location: Station {TIDE_STATION}")
         print(f"Units: Feet above MLLW")
         print("="*60)
         
         # Print raw data for reference
         print("\nRAW TIDE DATA:")
-        for i, (time_str, level) in enumerate(tide_data[:24]):
-            original_level = [level for _, level in tide_data][i]
-            print(f"{time_str}: {original_level:.2f} ft")
+        for time_str, level in tide_data[:24]:
+            print(f"{time_str}: {level:.2f} ft")
     
     def run_once(self):
         """Run the tide display once (for testing)"""
         print("Starting Tide Clock (Single Run)...")
         
+        self.show_api_status('fetching')
         tide_data = self.fetch_tide_data()
         if tide_data:
+            self.show_api_status('ok')
             # Display on both serial console and LED matrices
             self.display_ascii_chart(tide_data)
             self.display_on_matrices(tide_data)
         else:
+            self.show_api_status('fail')
             print("Failed to get tide data")
             # Show error pattern on matrices
             self.show_error_on_matrices()

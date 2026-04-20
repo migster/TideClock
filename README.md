@@ -33,17 +33,18 @@ WIFI_PASSWORD = "your_wifi_password"
 TIDE_STATION = "8726724"
 
 # Update interval in seconds (default: 3600 = 1 hour)
-UPDATE_INTERVAL = 3600
-
 # Time Settings
-NTP_SERVER = "time.google.com"
+NTP_SERVER = 'time.google.com'
 TIMEZONE_OFFSET = -5          # EST = -5, adjust for your location
 
 # LED Matrix Settings
-LED_BRIGHTNESS = "0.5"        # LED brightness (0.0 = off, 1.0 = full brightness)
-```
+LED_BRIGHTNESS = 1.0          # LED brightness (0.0 = off, 1.0 = full brightness)
 
-**Note:** String values (NTP_SERVER, LED_BRIGHTNESS) should use double quotes for proper CircuitPython TOML parsing.
+# Serial display mirror: "1" prints a 24x8 colored snapshot of the matrices to
+# the REPL at each frame change (boot stages, date, time, tide chart, etc.).
+# Set to "0" to silence. See "Display States" below.
+DISPLAY_DUMP = "1"
+```
 
 ### 4. Hardware Connections
 Connect three 8x8 LED matrices to I2C:
@@ -71,6 +72,76 @@ Connect three 8x8 LED matrices to I2C:
 - Raw tide data with timestamps and water levels
 - Debugging information for troubleshooting
 
+### Display States (Serial Mirror)
+
+Because the LEDs don't photograph well, `code.py` mirrors every matrix state
+to the serial console as a 24×8 colored grid (`dump_display`). Each dump is
+labeled and timestamped. The orientation below matches the physical panel —
+row 0 at the bottom, left-to-right is matrix 1 → matrix 2 → matrix 3.
+
+Legend: ⬛ off · 🟩 green · 🟥 red · 🟨 yellow
+
+**Boot stage indicator** — a single pixel in the bottom-left of each matrix
+lights up as each stage completes:
+
+| stage | matrix 1 | matrix 2 | matrix 3 |
+|---|---|---|---|
+| matrices alive | 🟩 | 🟩 | 🟩 |
+| wifi connecting | 🟩 | 🟨 | 🟩 |
+| wifi connected | 🟩 | 🟩 | 🟩 |
+| ntp syncing | 🟩 | 🟩 | 🟨 |
+| all stages green | 🟩 | 🟩 | 🟩 |
+| setup error | any non-green pin becomes 🟥 |  |  |
+
+**Date (MM / DD)** — shown ~3s during boot (here: `04 / 19`):
+
+```
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+🟩🟩🟩⬛🟩⬛🟩⬛ ⬛⬛⬛⬛🟩⬛⬛⬛ ⬛🟩⬛⬛🟩🟩🟩⬛
+🟩⬛🟩⬛🟩⬛🟩⬛ ⬛⬛⬛⬛🟩⬛⬛⬛ ⬛🟩⬛⬛🟩⬛🟩⬛
+🟩⬛🟩⬛🟩🟩🟩⬛ ⬛⬛⬛🟩⬛⬛⬛⬛ ⬛🟩⬛⬛🟩🟩🟩⬛
+🟩⬛🟩⬛⬛⬛🟩⬛ ⬛⬛🟩⬛⬛⬛⬛⬛ ⬛🟩⬛⬛⬛⬛🟩⬛
+🟩🟩🟩⬛⬛⬛🟩⬛ ⬛⬛🟩⬛⬛⬛⬛⬛ ⬛🟩⬛⬛🟩🟩🟩⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+```
+
+**Time (HH : MM)** — shown ~3s during boot (here: `14 : 41`):
+
+```
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛🟩⬛⬛🟩⬛🟩⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ 🟩⬛🟩⬛⬛🟩⬛⬛
+⬛🟩⬛⬛🟩⬛🟩⬛ ⬛⬛⬛🟩⬛⬛⬛⬛ 🟩⬛🟩⬛⬛🟩⬛⬛
+⬛🟩⬛⬛🟩🟩🟩⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ 🟩🟩🟩⬛⬛🟩⬛⬛
+⬛🟩⬛⬛⬛⬛🟩⬛ ⬛⬛⬛🟩⬛⬛⬛⬛ ⬛⬛🟩⬛⬛🟩⬛⬛
+⬛🟩⬛⬛⬛⬛🟩⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛🟩⬛⬛🟩⬛⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+```
+
+**Tide chart — the main display.** 🟨 marks the current hour, 🟥 marks other
+hours. x = hour within the 8-hour group, y = normalized tide level 0–7:
+
+```
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛🟥⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛🟥🟥⬛🟥⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛🟥⬛⬛⬛⬛⬛⬛ ⬛🟥⬛⬛⬛⬛🟨⬛ ⬛⬛⬛⬛⬛⬛⬛⬛
+🟥⬛🟥🟥⬛⬛⬛⬛ 🟥⬛⬛⬛⬛⬛⬛🟥 ⬛⬛⬛⬛⬛⬛⬛⬛
+⬛⬛⬛⬛🟥🟥🟥🟥 ⬛⬛⬛⬛⬛⬛⬛⬛ 🟥⬛⬛⬛⬛⬛⬛⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛🟥
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛🟥⬛⬛⬛⬛🟥⬛
+⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛⬛⬛⬛⬛⬛⬛ ⬛⬛🟥🟥🟥🟥⬛⬛
+   00–07           08–15           16–23
+```
+
+Additional states you'll see in the serial log:
+- `api status: fetching / ok / fail` — a status pixel at the top-right of matrix 1 flips 🟨 → 🟩 / 🟥.
+- `error X pattern` — a red ✕ on matrix 2 when a fetch fails.
+- `safe mode border` — yellow border on all three matrices after repeated failures.
+- `stale tide` — same chart as above but in green instead of red when serving cached data.
+
+To silence the serial mirror, set `DISPLAY_DUMP = "0"` in `settings.toml`.
+
 ### Update Schedule
 - **Hourly display updates**: LED matrices refresh when hour changes
 - **Daily data refresh**: New tide data fetched after midnight
@@ -91,16 +162,10 @@ Adjust timezone offset in `settings.toml`:
 TIMEZONE_OFFSET = -5  # EST = -5, PST = -8, etc.
 ```
 
-### Update Frequency
-Modify data refresh interval in `settings.toml`:
-```toml
-UPDATE_INTERVAL = 3600  # seconds (3600 = 1 hour)
-```
-
 ### LED Brightness
 Adjust the brightness of the LED matrices in `settings.toml`:
 ```toml
-LED_BRIGHTNESS = "0.5"  # Range: "0.0" (off) to "1.0" (full brightness)
+LED_BRIGHTNESS = 1.0  # Range: 0.0 (off) to 1.0 (full brightness)
 ```
 This setting controls the brightness of all three LED matrices. Lower values help reduce power consumption and may be more comfortable for indoor use.
 

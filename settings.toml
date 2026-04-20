@@ -6,12 +6,13 @@ WIFI_PASSWORD = "your_wifi_password"
 # Station ID for St. Petersburg, FL (default)
 TIDE_STATION = "8726724"
 
-# Update interval in seconds (default: 3600 = 1 hour)
-UPDATE_INTERVAL = 3600
-
 # Time Settings
 NTP_SERVER = "time.google.com"
 TIMEZONE_OFFSET = -5          # EST = -5, adjust for your location
 
 # LED Matrix Settings
-LED_BRIGHTNESS = "0.5"        # LED brightness (0.0 = off, 1.0 = full brightness)
+LED_BRIGHTNESS = "0.3"        # LED brightness (0.0 = off, 1.0 = full brightness)
+
+# Serial display mirror ("1" = print 24x8 colored snapshot of matrices to REPL
+# at each frame change; "0" = silent). Handy for debugging, noisy otherwise.
+DISPLAY_DUMP = "0"
