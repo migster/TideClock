@@ -1,0 +1,7 @@
+# Real device config (contains WiFi credentials). Use settings.example.toml as a template.
+settings.toml
+
+# Python / editor junk
+__pycache__/
+*.pyc
+.DS_Store
