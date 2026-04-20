@@ -8,7 +8,8 @@ TIDE_STATION = "8726724"
 
 # Time Settings
 NTP_SERVER = "time.google.com"
-TIMEZONE_OFFSET = -5          # EST = -5, adjust for your location
+TIMEZONE_OFFSET = -5          # Standard-time offset: EST = -5, CST = -6, MST = -7, PST = -8
+DST_AUTO = "1"                # "1" = auto +1 during US DST (2nd Sun Mar - 1st Sun Nov); "0" = disable
 
 # LED Matrix Settings
 LED_BRIGHTNESS = "0.3"        # LED brightness (0.0 = off, 1.0 = full brightness)

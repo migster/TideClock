@@ -44,6 +44,30 @@ except Exception as e:
     print(f"Error with NTP_SERVER: {e}")
     NTP_SERVER = 'time.google.com'
 
+# US DST auto-adjust: when enabled, TIMEZONE_OFFSET is treated as
+# standard-time offset and +1 is added during DST (2nd Sun Mar - 1st Sun Nov).
+DST_AUTO = os.getenv('DST_AUTO', '1') == '1'
+
+
+def is_us_dst(t):
+    """Return True if US DST is active for the given localtime struct.
+
+    US DST: 2nd Sunday of March through 1st Sunday of November.
+    tm_wday: 0=Mon ... 6=Sun.
+    """
+    month, mday, wday = t.tm_mon, t.tm_mday, t.tm_wday
+    if month < 3 or month > 11:
+        return False
+    if 3 < month < 11:
+        return True
+    days_since_sunday = (wday + 1) % 7
+    last_sunday_mday = mday - days_since_sunday
+    if month == 3:
+        # DST starts on the 2nd Sunday (mday 8-14)
+        return last_sunday_mday >= 8
+    # November: DST ends on the 1st Sunday (mday 1-7)
+    return last_sunday_mday < 1
+
 # Serial "display mirror": set DISPLAY_DUMP="0" in settings.toml to silence.
 DISPLAY_DUMP = os.getenv('DISPLAY_DUMP', '1') == '1'
 
@@ -219,18 +243,23 @@ class SimpleTideDisplay:
             return False
             
     def sync_time(self, pool):
-        """Sync local time with NTP server"""
+        """Sync local time with NTP server, auto-adjusting for US DST if enabled."""
         try:
             print(f"Syncing time with {NTP_SERVER}...")
+            # First sync at standard-time offset so we have a valid date to test DST against
             ntp = adafruit_ntp.NTP(pool, server=NTP_SERVER, tz_offset=TIMEZONE_OFFSET)
-            
-            # Set the RTC time
             rtc.RTC().datetime = ntp.datetime
-            
+
+            if DST_AUTO and is_us_dst(time.localtime()):
+                effective_offset = TIMEZONE_OFFSET + 1
+                print(f"DST active — re-syncing with offset {effective_offset}")
+                ntp = adafruit_ntp.NTP(pool, server=NTP_SERVER, tz_offset=effective_offset)
+                rtc.RTC().datetime = ntp.datetime
+
             current_time = time.localtime()
             print(f"Local time set to: {current_time.tm_year}-{current_time.tm_mon:02d}-{current_time.tm_mday:02d} "
                   f"{current_time.tm_hour:02d}:{current_time.tm_min:02d}:{current_time.tm_sec:02d}")
-            
+
         except Exception as e:
             print(f"Time sync failed: {e}")
             print("Continuing with system time...")
@@ -678,7 +707,10 @@ class SimpleTideDisplay:
                         consecutive_failures = 0  # Reset failure count
                         in_safe_mode = False      # Exit safe mode
                         data_is_stale = False     # Fresh data
-                        
+                        # Force immediate redraw so the user isn't stuck looking at
+                        # a stale-green or safe-mode border until the hour ticks.
+                        last_hour = -1
+
                         # Display on serial console when we get new data
                         self.display_ascii_chart(tide_data)
                         print("Tide data will refresh again after midnight...")
